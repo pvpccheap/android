@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -137,20 +138,29 @@ fun ScheduleScreen(
     }
 }
 
+// Colors personalitzats per als estats
+private val SuccessGreen = Color(0xFF2E7D32)  // Verd fosc
+private val WarningAmber = Color(0xFFFF8F00)  // Taronja/Ambre
+private val ErrorRed = Color(0xFFC62828)      // Vermell
+
 @Composable
 fun ScheduleActionCard(action: ScheduledAction) {
     val statusColor = when (action.status) {
-        "pending" -> MaterialTheme.colorScheme.primary
-        "executed" -> MaterialTheme.colorScheme.tertiary
-        "failed" -> MaterialTheme.colorScheme.error
-        "cancelled" -> MaterialTheme.colorScheme.outline
-        else -> MaterialTheme.colorScheme.surface
+        "pending" -> MaterialTheme.colorScheme.primary      // Blau
+        "executed", "executed_on", "executed_off" -> SuccessGreen  // Verd
+        "failed" -> ErrorRed                                 // Vermell
+        "missed" -> WarningAmber                            // Taronja
+        "cancelled" -> MaterialTheme.colorScheme.outline    // Gris
+        else -> WarningAmber  // Per defecte taronja (visible)
     }
 
     val statusText = when (action.status) {
         "pending" -> "Pendent"
         "executed" -> "Executat"
+        "executed_on" -> "Encès"
+        "executed_off" -> "Apagat"
         "failed" -> "Fallat"
+        "missed" -> "Perdut"
         "cancelled" -> "Cancel·lat"
         else -> action.status
     }

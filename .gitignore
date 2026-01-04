@@ -133,3 +133,5 @@ coverage/
 
 # Claude Code plans
 .claude/
+/keystore.properties.example
+/release-keystore.jks

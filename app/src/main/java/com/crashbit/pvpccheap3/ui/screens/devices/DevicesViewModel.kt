@@ -41,6 +41,8 @@ class DevicesViewModel @Inject constructor(
     val events: StateFlow<DevicesEvent?> = _events.asStateFlow()
 
     init {
+        // Sempre carregar dispositius del backend primer (independentment de Google Home auth)
+        loadDevicesFromBackend()
         initializeGoogleHome()
         observeGoogleHomeAuth()
         observeDeviceStateChanges()
@@ -57,11 +59,53 @@ class DevicesViewModel @Inject constructor(
             googleHomeRepository.authState.collect { authState ->
                 _uiState.value = _uiState.value.copy(googleHomeAuthState = authState)
                 if (authState == GoogleHomeAuthState.AUTHORIZED) {
-                    loadDevices()
-                    // Iniciar observació de canvis d'estat
+                    // Quan s'autoritza, refrescar estats dels dispositius i iniciar observació
+                    refreshDeviceStates()
                     startDeviceStateObservation()
                 }
             }
+        }
+    }
+
+    /**
+     * Carrega dispositius del backend (sense dependre de Google Home auth).
+     * Els dispositius sincronitzats es guarden al backend i sempre estan disponibles.
+     */
+    private fun loadDevicesFromBackend() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+
+            deviceRepository.getDevices()
+                .onSuccess { devices ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        devices = devices.map { device ->
+                            DeviceWithState(
+                                device = device,
+                                isOn = null,  // Estat desconegut fins que Google Home estigui autoritzat
+                                isOnline = false
+                            )
+                        }
+                    )
+                }
+                .onFailure { e ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = e.message ?: "Error carregant dispositius"
+                    )
+                }
+        }
+    }
+
+    /**
+     * Refresca els estats dels dispositius des de Google Home.
+     */
+    private fun refreshDeviceStates() {
+        viewModelScope.launch {
+            deviceRepository.getDevicesWithState()
+                .onSuccess { devicesWithState ->
+                    _uiState.value = _uiState.value.copy(devices = devicesWithState)
+                }
         }
     }
 
@@ -98,36 +142,46 @@ class DevicesViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
-            deviceRepository.getDevicesWithState()
-                .onSuccess { devices ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        devices = devices
-                    )
-                }
-                .onFailure { e ->
-                    // Si falla, intentem carregar sense estat
-                    deviceRepository.getDevices()
-                        .onSuccess { basicDevices ->
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                devices = basicDevices.map { device ->
-                                    DeviceWithState(
-                                        device = device,
-                                        isOn = null,
-                                        isOnline = false
-                                    )
-                                }
-                            )
-                        }
-                        .onFailure { e2 ->
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                error = e2.message ?: "Error carregant dispositius"
-                            )
-                        }
-                }
+            // Si tenim autorització de Google Home, carregar amb estats
+            if (_uiState.value.googleHomeAuthState == GoogleHomeAuthState.AUTHORIZED) {
+                deviceRepository.getDevicesWithState()
+                    .onSuccess { devices ->
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            devices = devices
+                        )
+                    }
+                    .onFailure {
+                        // Fallback a carregar només del backend
+                        loadDevicesFromBackendInternal()
+                    }
+            } else {
+                // Sense autorització, carregar només del backend
+                loadDevicesFromBackendInternal()
+            }
         }
+    }
+
+    private suspend fun loadDevicesFromBackendInternal() {
+        deviceRepository.getDevices()
+            .onSuccess { devices ->
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    devices = devices.map { device ->
+                        DeviceWithState(
+                            device = device,
+                            isOn = null,
+                            isOnline = false
+                        )
+                    }
+                )
+            }
+            .onFailure { e ->
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.message ?: "Error carregant dispositius"
+                )
+            }
     }
 
     /**

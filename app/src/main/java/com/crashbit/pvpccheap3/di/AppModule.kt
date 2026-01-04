@@ -2,6 +2,7 @@ package com.crashbit.pvpccheap3.di
 
 import android.content.Context
 import com.crashbit.pvpccheap3.data.api.PvpcApi
+import com.crashbit.pvpccheap3.data.local.ScheduleCache
 import com.crashbit.pvpccheap3.data.local.TokenManager
 import com.crashbit.pvpccheap3.data.repository.*
 import dagger.Module
@@ -21,6 +22,14 @@ object AppModule {
         @ApplicationContext context: Context
     ): TokenManager {
         return TokenManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideScheduleCache(
+        @ApplicationContext context: Context
+    ): ScheduleCache {
+        return ScheduleCache(context)
     }
 
     @Provides
@@ -68,8 +77,9 @@ object AppModule {
     @Provides
     @Singleton
     fun provideScheduleRepository(
-        api: PvpcApi
+        api: PvpcApi,
+        scheduleCache: ScheduleCache
     ): ScheduleRepository {
-        return ScheduleRepository(api)
+        return ScheduleRepository(api, scheduleCache)
     }
 }

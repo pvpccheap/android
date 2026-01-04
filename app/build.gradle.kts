@@ -1,9 +1,19 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+}
+
+// Carregar propietats del keystore si existeix
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -15,26 +25,41 @@ android {
         minSdk = 27  // Google Home APIs requereix mínim API 27
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // API Base URL - change for production
-        // Usa localhost amb adb reverse tcp:8080 tcp:8080
-        buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:8080/\"")
+        // API Base URL
+        buildConfigField("String", "API_BASE_URL", "\"http://46.62.223.158:8080/\"")
 
         // Google OAuth Web Client ID
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"960576529232-qv42rmg2559kt4ukvhbpk5nb9v3adafs.apps.googleusercontent.com\"")
     }
 
+    // Configuració de signatura per release
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "API_BASE_URL", "\"https://your-production-server.com/\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://46.62.223.158:8080/\"")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {

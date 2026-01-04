@@ -10,6 +10,7 @@ import com.google.home.HomeClient
 import com.google.home.HomeConfig
 import com.google.home.HomeException
 import com.google.home.FactoryRegistry
+import com.google.home.PermissionsState
 import com.google.home.Structure
 import com.google.home.matter.standard.OnOff
 import com.google.home.matter.standard.OnOffLightDevice
@@ -114,29 +115,121 @@ class GoogleHomeRepository @Inject constructor(
 
     /**
      * Comprova si ja tenim permisos vàlids de sessions anteriors.
+     * Utilitza hasPermissions() que és l'API correcta segons la documentació.
      */
     private suspend fun checkExistingPermissions() {
+        val client = homeClient ?: return
+
+        Log.d(TAG, "Comprovant permisos existents amb hasPermissions()...")
+
         try {
-            val client = homeClient ?: return
-
-            Log.d(TAG, "Comprovant permisos existents...")
-
-            // Intentem obtenir estructures sense forceLaunch
-            // Si ja tenim permisos, funcionarà
-            val result = withTimeoutOrNull(3000L) {
-                client.structures().first()
+            // Utilitzar hasPermissions() que és l'API correcta
+            val permissionsState = withTimeoutOrNull(5000L) {
+                client.hasPermissions().first()
             }
 
-            if (result != null && result.isNotEmpty()) {
-                Log.d(TAG, "Permisos existents trobats! Estructures: ${result.size}")
+            Log.d(TAG, "PermissionsState: $permissionsState")
+
+            when (permissionsState) {
+                PermissionsState.GRANTED -> {
+                    Log.d(TAG, "Permisos concedits!")
+                    _isAuthorized.value = true
+                    _authState.value = GoogleHomeAuthState.AUTHORIZED
+                }
+                PermissionsState.NOT_GRANTED -> {
+                    Log.d(TAG, "Permisos no concedits, cal sol·licitar-los")
+                    _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+                }
+                PermissionsState.PERMISSIONS_STATE_UNAVAILABLE -> {
+                    Log.d(TAG, "Estat de permisos no disponible, cal sol·licitar-los")
+                    _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+                }
+                PermissionsState.PERMISSIONS_STATE_UNINITIALIZED -> {
+                    Log.d(TAG, "Permisos encara inicialitzant-se, reintentant...")
+                    // Esperar i reintentar
+                    delay(2000)
+                    checkExistingPermissionsWithRetry(retries = 2)
+                }
+                null -> {
+                    Log.d(TAG, "Timeout comprovant permisos")
+                    // Intentar amb estructures com a fallback
+                    checkPermissionsViaStructures()
+                }
+                else -> {
+                    Log.d(TAG, "Estat de permisos desconegut: $permissionsState")
+                    _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error comprovant permisos: ${e.message}", e)
+            // Fallback: intentar amb estructures
+            checkPermissionsViaStructures()
+        }
+    }
+
+    /**
+     * Reintenta comprovar permisos amb un nombre limitat de reintents.
+     */
+    private suspend fun checkExistingPermissionsWithRetry(retries: Int) {
+        if (retries <= 0) {
+            Log.d(TAG, "Màxim de reintents assolit")
+            _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+            return
+        }
+
+        val client = homeClient ?: return
+
+        try {
+            val permissionsState = withTimeoutOrNull(5000L) {
+                client.hasPermissions().first()
+            }
+
+            when (permissionsState) {
+                PermissionsState.GRANTED -> {
+                    Log.d(TAG, "Permisos concedits després de retry!")
+                    _isAuthorized.value = true
+                    _authState.value = GoogleHomeAuthState.AUTHORIZED
+                }
+                PermissionsState.PERMISSIONS_STATE_UNINITIALIZED -> {
+                    Log.d(TAG, "Encara inicialitzant, reintentant... (${retries - 1} restants)")
+                    delay(2000)
+                    checkExistingPermissionsWithRetry(retries - 1)
+                }
+                else -> {
+                    Log.d(TAG, "Permisos no disponibles: $permissionsState")
+                    _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error en retry: ${e.message}")
+            _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+        }
+    }
+
+    /**
+     * Fallback: comprova permisos intentant accedir a estructures.
+     */
+    private suspend fun checkPermissionsViaStructures() {
+        val client = homeClient ?: return
+
+        Log.d(TAG, "Fallback: comprovant permisos via estructures...")
+
+        try {
+            // Timeout més llarg per donar temps al SDK
+            val structures = withTimeoutOrNull(8000L) {
+                client.structures().first { it.isNotEmpty() }
+            }
+
+            if (structures != null) {
+                Log.d(TAG, "Estructures trobades via fallback: ${structures.size}")
                 _isAuthorized.value = true
                 _authState.value = GoogleHomeAuthState.AUTHORIZED
             } else {
-                Log.d(TAG, "No hi ha permisos existents o no hi ha estructures")
+                Log.d(TAG, "No s'han trobat estructures")
                 _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
             }
         } catch (e: Exception) {
-            Log.d(TAG, "No hi ha permisos existents: ${e.message}")
+            Log.d(TAG, "Fallback fallit: ${e.message}")
             _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
         }
     }

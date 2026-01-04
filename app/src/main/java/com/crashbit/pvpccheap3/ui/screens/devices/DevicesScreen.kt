@@ -65,22 +65,31 @@ fun DevicesScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                uiState.googleHomeAuthState == GoogleHomeAuthState.NOT_AUTHORIZED -> {
-                    // Mostrar pantalla per connectar Google Home
+                // Si no hi ha dispositius i no està autoritzat → prompt de connectar
+                uiState.devices.isEmpty() && uiState.googleHomeAuthState == GoogleHomeAuthState.NOT_AUTHORIZED -> {
                     GoogleHomeConnectPrompt(
                         onConnectClick = { viewModel.requestGoogleHomeAuthorization() },
                         isLoading = uiState.isSyncing
                     )
                 }
+                // Si no hi ha dispositius però està autoritzat → prompt de sincronitzar
                 uiState.devices.isEmpty() -> {
                     EmptyDevicesPrompt(
                         onSyncClick = { viewModel.startGoogleHomeSync() }
                     )
                 }
+                // Si hi ha dispositius → mostrar-los sempre (amb o sense control)
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         // Banner d'optimització de bateria
                         BatteryOptimizationBanner()
+
+                        // Banner si no hi ha connexió amb Google Home
+                        if (uiState.googleHomeAuthState != GoogleHomeAuthState.AUTHORIZED) {
+                            GoogleHomeReconnectBanner(
+                                onReconnectClick = { viewModel.requestGoogleHomeAuthorization() }
+                            )
+                        }
 
                         DevicesList(
                             devices = uiState.devices,
@@ -89,6 +98,7 @@ fun DevicesScreen(
                             },
                             onToggleActive = { viewModel.toggleDeviceActive(it.device) },
                             onDelete = { viewModel.deleteDevice(it.device.id) },
+                            googleHomeConnected = uiState.googleHomeAuthState == GoogleHomeAuthState.AUTHORIZED,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -205,11 +215,54 @@ fun EmptyDevicesPrompt(onSyncClick: () -> Unit) {
 }
 
 @Composable
+fun GoogleHomeReconnectBanner(
+    onReconnectClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    Icons.Default.CloudOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Control no disponible. Reconnecta Google Home.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+            TextButton(onClick = onReconnectClick) {
+                Text("Reconnectar")
+            }
+        }
+    }
+}
+
+@Composable
 fun DevicesList(
     devices: List<DeviceWithState>,
     onControlDevice: (DeviceWithState, Boolean) -> Unit,
     onToggleActive: (DeviceWithState) -> Unit,
     onDelete: (DeviceWithState) -> Unit,
+    googleHomeConnected: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
