@@ -98,6 +98,7 @@ fun DevicesScreen(
                             },
                             onToggleActive = { viewModel.toggleDeviceActive(it.device) },
                             onDelete = { viewModel.deleteDevice(it.device.id) },
+                            onReassign = { viewModel.startReassign(it) },
                             googleHomeConnected = uiState.googleHomeAuthState == GoogleHomeAuthState.AUTHORIZED,
                             modifier = Modifier.weight(1f)
                         )
@@ -125,6 +126,21 @@ fun DevicesScreen(
             },
             onDismiss = { viewModel.cancelDeviceSelection() }
         )
+    }
+
+    // Dialog per reassignar dispositiu
+    uiState.deviceToReassign?.let { deviceToReassign ->
+        if (uiState.showReassignDialog) {
+            ReassignDeviceDialog(
+                deviceToReassign = deviceToReassign,
+                googleHomeDevices = uiState.googleHomeDevices,
+                isLoading = uiState.isReassigning,
+                onConfirm = { selectedDevice ->
+                    viewModel.reassignDevice(selectedDevice)
+                },
+                onDismiss = { viewModel.cancelReassign() }
+            )
+        }
     }
 }
 
@@ -262,6 +278,7 @@ fun DevicesList(
     onControlDevice: (DeviceWithState, Boolean) -> Unit,
     onToggleActive: (DeviceWithState) -> Unit,
     onDelete: (DeviceWithState) -> Unit,
+    onReassign: (DeviceWithState) -> Unit,
     googleHomeConnected: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -275,7 +292,8 @@ fun DevicesList(
                 deviceWithState = deviceWithState,
                 onControlDevice = onControlDevice,
                 onToggleActive = onToggleActive,
-                onDelete = onDelete
+                onDelete = onDelete,
+                onReassign = onReassign
             )
         }
     }
@@ -286,7 +304,8 @@ fun DeviceCardWithControl(
     deviceWithState: DeviceWithState,
     onControlDevice: (DeviceWithState, Boolean) -> Unit,
     onToggleActive: (DeviceWithState) -> Unit,
-    onDelete: (DeviceWithState) -> Unit
+    onDelete: (DeviceWithState) -> Unit,
+    onReassign: (DeviceWithState) -> Unit
 ) {
     val device = deviceWithState.device
 
@@ -387,12 +406,25 @@ fun DeviceCardWithControl(
                     )
                 }
 
-                IconButton(onClick = { onDelete(deviceWithState) }) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Eliminar",
-                        tint = MaterialTheme.colorScheme.error
-                    )
+                Row {
+                    // Botó reassignar (visible si dispositiu offline)
+                    if (!deviceWithState.isOnline) {
+                        IconButton(onClick = { onReassign(deviceWithState) }) {
+                            Icon(
+                                Icons.Default.LinkOff,
+                                contentDescription = "Reassignar",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = { onDelete(deviceWithState) }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Eliminar",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }
@@ -473,6 +505,115 @@ fun DeviceSelectorDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
+                Text("Cancel·lar")
+            }
+        }
+    )
+}
+
+@Composable
+fun ReassignDeviceDialog(
+    deviceToReassign: DeviceWithState,
+    googleHomeDevices: List<GoogleHomeDevice>,
+    isLoading: Boolean,
+    onConfirm: (GoogleHomeDevice) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedDevice by remember { mutableStateOf<GoogleHomeDevice?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        title = {
+            Text("Reassignar \"${deviceToReassign.device.name}\"")
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Selecciona el dispositiu de Google Home que correspon a aquest dispositiu:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                if (googleHomeDevices.isEmpty()) {
+                    Text(
+                        text = "No s'han trobat dispositius controlables a Google Home",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 300.dp)
+                    ) {
+                        items(googleHomeDevices) { device ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = selectedDevice == device,
+                                    onClick = { selectedDevice = device },
+                                    enabled = !isLoading
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = device.name,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Row {
+                                        device.roomName?.let { room ->
+                                            Text(
+                                                text = room,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = " · ",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Text(
+                                            text = device.deviceType.displayName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    // Mostrar ID per debug
+                                    Text(
+                                        text = "ID: ${device.id.take(20)}...",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { selectedDevice?.let { onConfirm(it) } },
+                enabled = selectedDevice != null && !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text("Reassignar")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isLoading
+            ) {
                 Text("Cancel·lar")
             }
         }

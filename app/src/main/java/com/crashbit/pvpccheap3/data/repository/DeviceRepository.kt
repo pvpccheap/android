@@ -28,7 +28,19 @@ class DeviceRepository @Inject constructor(
 
     suspend fun updateDevice(deviceId: String, name: String?, isActive: Boolean?): Result<Device> {
         return try {
-            Result.success(api.updateDevice(deviceId, DeviceUpdateRequest(name, isActive)))
+            Result.success(api.updateDevice(deviceId, DeviceUpdateRequest(name = name, isActive = isActive)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Reassigna el googleDeviceId d'un dispositiu.
+     * Útil quan un dispositiu s'ha resincronitzat a Google Home i té un ID nou.
+     */
+    suspend fun reassignGoogleDeviceId(deviceId: String, newGoogleDeviceId: String): Result<Device> {
+        return try {
+            Result.success(api.updateDevice(deviceId, DeviceUpdateRequest(googleDeviceId = newGoogleDeviceId)))
         } catch (e: Exception) {
             Result.failure(e)
         }

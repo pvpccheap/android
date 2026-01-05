@@ -19,13 +19,18 @@ data class DevicesUiState(
     val error: String? = null,
     val isSyncing: Boolean = false,
     val googleHomeAuthState: GoogleHomeAuthState = GoogleHomeAuthState.NOT_INITIALIZED,
-    val showDeviceSelector: Boolean = false
+    val showDeviceSelector: Boolean = false,
+    // Estat per reassignar dispositiu
+    val showReassignDialog: Boolean = false,
+    val deviceToReassign: DeviceWithState? = null,
+    val isReassigning: Boolean = false
 )
 
 sealed class DevicesEvent {
     data class ShowError(val message: String) : DevicesEvent()
     data class DeviceControlled(val deviceName: String, val isOn: Boolean) : DevicesEvent()
     data object SyncCompleted : DevicesEvent()
+    data class DeviceReassigned(val deviceName: String) : DevicesEvent()
 }
 
 @HiltViewModel
@@ -386,5 +391,89 @@ class DevicesViewModel @Inject constructor(
 
     fun clearEvent() {
         _events.value = null
+    }
+
+    // ==================== REASSIGNACIÓ DE DISPOSITIUS ====================
+
+    /**
+     * Inicia el procés de reassignació d'un dispositiu.
+     * Mostra el diàleg per seleccionar el nou dispositiu de Google Home.
+     */
+    fun startReassign(deviceWithState: DeviceWithState) {
+        viewModelScope.launch {
+            if (_uiState.value.googleHomeAuthState != GoogleHomeAuthState.AUTHORIZED) {
+                _uiState.value = _uiState.value.copy(
+                    error = "Cal connectar Google Home primer"
+                )
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(isReassigning = true)
+
+            // Obtenir dispositius de Google Home
+            googleHomeRepository.getControllableDevices()
+                .onSuccess { devices ->
+                    _uiState.value = _uiState.value.copy(
+                        googleHomeDevices = devices,
+                        deviceToReassign = deviceWithState,
+                        showReassignDialog = true,
+                        isReassigning = false
+                    )
+                }
+                .onFailure { e ->
+                    _uiState.value = _uiState.value.copy(
+                        isReassigning = false,
+                        error = "Error obtenint dispositius: ${e.message}"
+                    )
+                }
+        }
+    }
+
+    /**
+     * Reassigna el googleDeviceId d'un dispositiu.
+     */
+    fun reassignDevice(newGoogleHomeDevice: GoogleHomeDevice) {
+        val deviceToReassign = _uiState.value.deviceToReassign ?: return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isReassigning = true)
+
+            deviceRepository.reassignGoogleDeviceId(
+                deviceId = deviceToReassign.device.id,
+                newGoogleDeviceId = newGoogleHomeDevice.id
+            )
+                .onSuccess { updatedDevice ->
+                    _uiState.value = _uiState.value.copy(
+                        showReassignDialog = false,
+                        deviceToReassign = null,
+                        isReassigning = false,
+                        devices = _uiState.value.devices.map {
+                            if (it.device.id == updatedDevice.id) {
+                                it.copy(device = updatedDevice, isOnline = true)
+                            } else it
+                        }
+                    )
+                    _events.value = DevicesEvent.DeviceReassigned(updatedDevice.name)
+                    // Refrescar estats després de reassignar
+                    refreshDeviceStates()
+                }
+                .onFailure { e ->
+                    _uiState.value = _uiState.value.copy(
+                        isReassigning = false,
+                        error = "Error reassignant: ${e.message}"
+                    )
+                }
+        }
+    }
+
+    /**
+     * Cancel·la el diàleg de reassignació.
+     */
+    fun cancelReassign() {
+        _uiState.value = _uiState.value.copy(
+            showReassignDialog = false,
+            deviceToReassign = null,
+            googleHomeDevices = emptyList()
+        )
     }
 }

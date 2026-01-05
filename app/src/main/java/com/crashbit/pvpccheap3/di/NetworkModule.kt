@@ -3,6 +3,11 @@ package com.crashbit.pvpccheap3.di
 import com.crashbit.pvpccheap3.BuildConfig
 import com.crashbit.pvpccheap3.data.api.AuthInterceptor
 import com.crashbit.pvpccheap3.data.api.PvpcApi
+import com.crashbit.pvpccheap3.data.api.TokenAuthenticator
+import com.crashbit.pvpccheap3.data.local.AuthEvent
+import com.crashbit.pvpccheap3.data.local.AuthStateManager
+import com.crashbit.pvpccheap3.data.local.TokenManager
+import com.google.gson.Gson
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -20,6 +25,10 @@ object NetworkModule {
 
     @Provides
     @Singleton
+    fun provideGson(): Gson = Gson()
+
+    @Provides
+    @Singleton
     fun provideLoggingInterceptor(): HttpLoggingInterceptor {
         return HttpLoggingInterceptor().apply {
             level = if (BuildConfig.DEBUG) {
@@ -32,13 +41,33 @@ object NetworkModule {
 
     @Provides
     @Singleton
+    fun provideTokenAuthenticator(
+        tokenManager: TokenManager,
+        authStateManager: AuthStateManager,
+        gson: Gson
+    ): TokenAuthenticator {
+        return TokenAuthenticator(
+            tokenManager = tokenManager,
+            baseUrl = BuildConfig.API_BASE_URL,
+            gson = gson
+        ).apply {
+            setOnAuthenticationRequired {
+                authStateManager.tryEmitEvent(AuthEvent.AuthenticationRequired)
+            }
+        }
+    }
+
+    @Provides
+    @Singleton
     fun provideOkHttpClient(
         authInterceptor: AuthInterceptor,
+        tokenAuthenticator: TokenAuthenticator,
         loggingInterceptor: HttpLoggingInterceptor
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
             .addInterceptor(loggingInterceptor)
+            .authenticator(tokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)

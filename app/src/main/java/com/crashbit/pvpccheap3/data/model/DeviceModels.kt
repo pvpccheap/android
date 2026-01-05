@@ -28,9 +28,11 @@ data class DeviceSyncItem(
 )
 
 data class DeviceUpdateRequest(
-    val name: String?,
+    val name: String? = null,
     @SerializedName("is_active")
-    val isActive: Boolean?
+    val isActive: Boolean? = null,
+    @SerializedName("google_device_id")
+    val googleDeviceId: String? = null
 )
 
 /**
