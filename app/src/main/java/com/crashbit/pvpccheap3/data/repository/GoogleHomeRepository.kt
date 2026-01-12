@@ -722,12 +722,16 @@ class GoogleHomeRepository @Inject constructor(
                                         }
                                     }
                                 }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                Log.d(TAG, "Observació de dispositius cancel·lada")
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error observant dispositius: ${e.message}")
                             }
                         }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "Observació d'estructures cancel·lada")
             } catch (e: Exception) {
                 Log.e(TAG, "Error en observació: ${e.message}")
             }
@@ -776,6 +780,9 @@ class GoogleHomeRepository @Inject constructor(
                     }
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Ignorar cancel·lacions - és normal quan es reinicia l'observació
+            Log.d(TAG, "Observació cancel·lada per dispositiu $deviceId")
         } catch (e: Exception) {
             Log.e(TAG, "Error observant dispositiu $deviceId: ${e.message}")
         }
