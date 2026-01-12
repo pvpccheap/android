@@ -2,10 +2,10 @@ package com.crashbit.pvpccheap3.ui.navigation
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Rule
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Euro
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Rule
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,7 +36,7 @@ sealed class BottomNavItem(
     val icon: ImageVector
 ) {
     data object Devices : BottomNavItem(Screen.Devices.route, "Dispositius", Icons.Default.Home)
-    data object Rules : BottomNavItem(Screen.Rules.route, "Regles", Icons.Default.Rule)
+    data object Rules : BottomNavItem(Screen.Rules.route, "Regles", Icons.AutoMirrored.Filled.Rule)
     data object Schedule : BottomNavItem(Screen.Schedule.route, "Horari", Icons.Default.DateRange)
     data object Prices : BottomNavItem(Screen.Prices.route, "Preus", Icons.Default.Euro)
 }

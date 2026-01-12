@@ -26,13 +26,14 @@ private val Context.scheduleDataStore: DataStore<Preferences> by preferencesData
  */
 @Singleton
 class ScheduleCache @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "ScheduleCache"
         private val SCHEDULE_DATA_KEY = stringPreferencesKey("schedule_data")
         private val SCHEDULE_DATE_KEY = stringPreferencesKey("schedule_date")
         private val LAST_UPDATE_KEY = longPreferencesKey("last_update")
+        private val PENDING_SYNC_KEY = stringPreferencesKey("pending_sync")
 
         // Màxim temps que la cache és vàlida (24 hores)
         private const val CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000L
@@ -160,6 +161,71 @@ class ScheduleCache @Inject constructor(
             context.scheduleDataStore.data.first()[LAST_UPDATE_KEY] ?: 0L
         } catch (e: Exception) {
             0L
+        }
+    }
+
+    /**
+     * Marca una acció com pendent de sincronització amb el backend.
+     * Útil per reintentar la sincronització quan hi hagi connexió.
+     */
+    suspend fun markPendingSync(actionId: String, status: String) {
+        try {
+            val prefs = context.scheduleDataStore.data.first()
+            val existingJson = prefs[PENDING_SYNC_KEY] ?: "{}"
+
+            val type = object : TypeToken<MutableMap<String, String>>() {}.type
+            val pendingMap: MutableMap<String, String> = try {
+                gson.fromJson(existingJson, type) ?: mutableMapOf()
+            } catch (e: Exception) {
+                mutableMapOf()
+            }
+
+            pendingMap[actionId] = status
+
+            context.scheduleDataStore.edit { prefs ->
+                prefs[PENDING_SYNC_KEY] = gson.toJson(pendingMap)
+            }
+            Log.d(TAG, "Acció marcada per sincronització pendent: $actionId -> $status")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error marcant sincronització pendent: ${e.message}")
+        }
+    }
+
+    /**
+     * Obté les accions pendents de sincronització.
+     */
+    suspend fun getPendingSyncs(): Map<String, String> {
+        return try {
+            val prefs = context.scheduleDataStore.data.first()
+            val json = prefs[PENDING_SYNC_KEY] ?: return emptyMap()
+
+            val type = object : TypeToken<Map<String, String>>() {}.type
+            gson.fromJson(json, type) ?: emptyMap()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error obtenint sincronitzacions pendents: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    /**
+     * Neteja una acció de la llista de pendents de sincronització.
+     */
+    suspend fun clearPendingSync(actionId: String) {
+        try {
+            val prefs = context.scheduleDataStore.data.first()
+            val existingJson = prefs[PENDING_SYNC_KEY] ?: return
+
+            val type = object : TypeToken<MutableMap<String, String>>() {}.type
+            val pendingMap: MutableMap<String, String> = gson.fromJson(existingJson, type) ?: return
+
+            pendingMap.remove(actionId)
+
+            context.scheduleDataStore.edit { prefs ->
+                prefs[PENDING_SYNC_KEY] = gson.toJson(pendingMap)
+            }
+            Log.d(TAG, "Acció eliminada de pendents: $actionId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error netejant sincronització pendent: ${e.message}")
         }
     }
 }

@@ -1,11 +1,14 @@
 package com.crashbit.pvpccheap3.ui.screens.rules
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.crashbit.pvpccheap3.data.model.RuleWithDevice
 import com.crashbit.pvpccheap3.data.model.UpdateRuleRequest
 import com.crashbit.pvpccheap3.data.repository.RuleRepository
+import com.crashbit.pvpccheap3.service.ScheduleExecutorService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +23,8 @@ data class RulesUiState(
 
 @HiltViewModel
 class RulesViewModel @Inject constructor(
-    private val ruleRepository: RuleRepository
+    private val ruleRepository: RuleRepository,
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RulesUiState())
@@ -70,6 +74,8 @@ class RulesViewModel @Inject constructor(
                             if (it.id == updatedRule.id) updatedRule else it
                         }
                     )
+                    // Forçar sincronització de schedules
+                    ScheduleExecutorService.syncPrices(context)
                 }
                 .onFailure { e ->
                     _uiState.value = _uiState.value.copy(
@@ -86,6 +92,8 @@ class RulesViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         rules = _uiState.value.rules.filter { it.id != ruleId }
                     )
+                    // Forçar sincronització de schedules
+                    ScheduleExecutorService.syncPrices(context)
                 }
                 .onFailure { e ->
                     _uiState.value = _uiState.value.copy(

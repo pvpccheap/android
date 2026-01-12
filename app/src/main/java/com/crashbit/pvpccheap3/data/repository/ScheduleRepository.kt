@@ -95,23 +95,37 @@ class ScheduleRepository @Inject constructor(
 
     /**
      * Actualitza l'estat d'una acció.
-     * Sempre actualitza el cache local, i intenta sincronitzar amb el backend.
+     * Sempre actualitza el cache local, i intenta sincronitzar amb el backend amb retry.
      */
     suspend fun updateActionStatus(actionId: String, status: String): Result<Unit> {
         // Primer actualitzem el cache local (sempre funciona)
         scheduleCache.updateActionStatus(actionId, status)
 
-        return try {
-            // Després intentem sincronitzar amb el backend
-            api.updateActionStatus(actionId, UpdateActionStatusRequest(status))
-            Log.d(TAG, "Estat sincronitzat amb backend: $actionId -> $status")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            // L'error del backend no és crític - el cache local ja està actualitzat
-            Log.w(TAG, "No s'ha pogut sincronitzar estat amb backend: ${e.message}")
-            // Retornem success perquè el cache local està actualitzat
-            Result.success(Unit)
+        // Intentar sincronitzar amb el backend amb retry automàtic
+        var lastException: Exception? = null
+        val maxRetries = 3
+
+        repeat(maxRetries) { attempt ->
+            try {
+                api.updateActionStatus(actionId, UpdateActionStatusRequest(status))
+                Log.d(TAG, "Estat sincronitzat amb backend: $actionId -> $status")
+                return Result.success(Unit)
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "Intent ${attempt + 1}/$maxRetries fallit per $actionId: ${e.message}")
+                if (attempt < maxRetries - 1) {
+                    // Esperar abans del següent intent (backoff exponencial)
+                    kotlinx.coroutines.delay(500L * (attempt + 1))
+                }
+            }
         }
+
+        // Si tots els intents fallen, loguejar l'error però retornar success
+        // perquè el cache local està actualitzat
+        Log.e(TAG, "No s'ha pogut sincronitzar $actionId amb backend després de $maxRetries intents: ${lastException?.message}")
+        // Guardar per sincronització posterior (quan hi hagi connexió)
+        scheduleCache.markPendingSync(actionId, status)
+        return Result.success(Unit)
     }
 
     /**

@@ -4,8 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import com.crashbit.pvpccheap3.worker.HourlyAlarmScheduler
-import com.crashbit.pvpccheap3.worker.ScheduleWorkManager
+import com.crashbit.pvpccheap3.service.ActionAlarmScheduler
+import com.crashbit.pvpccheap3.service.ScheduleExecutorService
+import com.crashbit.pvpccheap3.util.BatteryOptimizationHelper
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -19,9 +20,6 @@ class PvpcApp : Application(), Configuration.Provider {
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
-    @Inject
-    lateinit var scheduleWorkManager: ScheduleWorkManager
-
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
@@ -32,12 +30,27 @@ class PvpcApp : Application(), Configuration.Provider {
         super.onCreate()
         Log.d(TAG, "Inicialitzant aplicació...")
 
-        // Iniciar el worker periòdic (backup cada 15 min)
-        scheduleWorkManager.startScheduleExecution()
-        Log.d(TAG, "Worker de schedules iniciat")
+        // Iniciar el Foreground Service
+        ScheduleExecutorService.startService(this)
+        Log.d(TAG, "Foreground Service iniciat")
 
-        // Iniciar alarmes horàries exactes
-        HourlyAlarmScheduler(this).scheduleNextHourlyAlarm()
-        Log.d(TAG, "Alarma horària programada")
+        // Programar sincronització de preus (20:35)
+        ActionAlarmScheduler.schedulePriceSync(this)
+        Log.d(TAG, "Alarma de sincronització de preus programada")
+
+        // Programar sincronització a mitjanit
+        ActionAlarmScheduler.scheduleMidnightSync(this)
+        Log.d(TAG, "Alarma de mitjanit programada")
+
+        // Sincronitzar schedules immediatament
+        ScheduleExecutorService.syncPrices(this)
+        Log.d(TAG, "Sincronització inicial iniciada")
+
+        // Avisar si no tenim exempció de bateria
+        if (!BatteryOptimizationHelper.isIgnoringBatteryOptimizations(this)) {
+            Log.w(TAG, "ATENCIÓ: L'app NO està exempta d'optimització de bateria!")
+        } else {
+            Log.d(TAG, "L'app està exempta d'optimització de bateria")
+        }
     }
 }

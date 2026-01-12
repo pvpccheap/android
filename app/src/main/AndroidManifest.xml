@@ -8,7 +8,9 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".PvpcApp"
@@ -33,17 +35,31 @@
             </intent-filter>
         </activity>
 
-        <!-- Receiver per alarmes horàries -->
+        <!-- Foreground Service per executar accions programades -->
+        <service
+            android:name=".service.ScheduleExecutorService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Home automation - controlling smart home devices based on electricity prices" />
+        </service>
+
+        <!-- Receiver per alarmes d'accions -->
         <receiver
-            android:name=".worker.HourlyAlarmReceiver"
+            android:name=".service.ActionAlarmReceiver"
+            android:enabled="true"
             android:exported="false" />
 
-        <!-- Receiver per reiniciar alarmes després de boot -->
+        <!-- Receiver per reiniciar servei després de boot -->
         <receiver
             android:name=".worker.BootReceiver"
+            android:enabled="true"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 

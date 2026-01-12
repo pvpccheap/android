@@ -41,7 +41,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class GoogleHomeRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "GoogleHomeRepository"
@@ -53,6 +53,11 @@ class GoogleHomeRepository @Inject constructor(
     val authState: Flow<GoogleHomeAuthState> = _authState.asStateFlow()
 
     private val _isAuthorized = MutableStateFlow(false)
+
+    /**
+     * Retorna si el repositori està inicialitzat i autoritzat.
+     */
+    fun isInitialized(): Boolean = homeClient != null && _isAuthorized.value
 
     // Cache simple per dispositius
     private data class CachedDevice(
@@ -154,10 +159,6 @@ class GoogleHomeRepository @Inject constructor(
                     Log.d(TAG, "Timeout comprovant permisos")
                     // Intentar amb estructures com a fallback
                     checkPermissionsViaStructures()
-                }
-                else -> {
-                    Log.d(TAG, "Estat de permisos desconegut: $permissionsState")
-                    _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
                 }
             }
         } catch (e: Exception) {
@@ -547,13 +548,78 @@ class GoogleHomeRepository @Inject constructor(
 
     /**
      * Obté l'estat actual d'un dispositiu.
+     * Intenta obtenir l'estat real del SDK, amb fallback al cache.
      */
     suspend fun getDeviceState(deviceId: String): Result<Boolean?> = withContext(Dispatchers.IO) {
         try {
-            Result.success(deviceCache[deviceId]?.isOn)
+            val client = homeClient ?: return@withContext Result.success(deviceCache[deviceId]?.isOn)
+
+            if (!_isAuthorized.value) {
+                Log.d(TAG, "No autoritzat, retornant cache per $deviceId")
+                return@withContext Result.success(deviceCache[deviceId]?.isOn)
+            }
+
+            // Intentar obtenir l'estat real del dispositiu amb timeout
+            val realState = withTimeoutOrNull(5000L) {
+                getRealDeviceState(client, deviceId)
+            }
+
+            if (realState != null) {
+                // Actualitzar cache amb l'estat real
+                deviceCache[deviceId] = CachedDevice(deviceId, realState)
+                Log.d(TAG, "Estat real obtingut per $deviceId: $realState")
+                Result.success(realState)
+            } else {
+                // Fallback al cache si no podem obtenir l'estat real
+                Log.w(TAG, "Timeout obtenint estat real, utilitzant cache per $deviceId")
+                Result.success(deviceCache[deviceId]?.isOn)
+            }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Error obtenint estat de $deviceId, utilitzant cache: ${e.message}")
+            Result.success(deviceCache[deviceId]?.isOn)
         }
+    }
+
+    /**
+     * Obté l'estat real d'un dispositiu des del SDK.
+     */
+    private suspend fun getRealDeviceState(client: HomeClient, deviceId: String): Boolean? {
+        try {
+            val structures = client.structures().first()
+
+            for (structure in structures) {
+                val homeDevices = structure.devices().list()
+
+                for (homeDevice in homeDevices) {
+                    if (homeDevice.id.id == deviceId) {
+                        val types = withTimeoutOrNull(3000L) {
+                            homeDevice.types().first()
+                        } ?: return null
+
+                        for (type in types) {
+                            val onOffTrait = when (type) {
+                                is OnOffLightDevice -> type.standardTraits.onOff
+                                is DimmableLightDevice -> type.standardTraits.onOff
+                                is OnOffPluginUnitDevice -> type.standardTraits.onOff
+                                else -> null
+                            }
+
+                            if (onOffTrait != null) {
+                                return try {
+                                    onOffTrait.onOff
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "No s'ha pogut llegir estat OnOff: ${e.message}")
+                                    null
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error obtenint estat real: ${e.message}")
+        }
+        return null
     }
 
     /**

@@ -39,7 +39,8 @@ enum class ActionStatus(val value: String) {
     EXECUTED_ON("executed_on"),
     EXECUTED_OFF("executed_off"),
     FAILED("failed"),
-    CANCELLED("cancelled")
+    CANCELLED("cancelled"),
+    MISSED("missed")  // Acció que no es va executar i l'hora ja ha passat
 }
 
 data class UpdateActionStatusRequest(

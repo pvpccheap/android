@@ -12,7 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -28,7 +28,7 @@ fun ScheduleScreen(
     viewModel: ScheduleViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val dateFormatter = remember { DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ca")) }
+    val dateFormatter = remember { DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.forLanguageTag("ca")) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Refrescar horari quan la pantalla torna a ser visible (sense mostrar loading)
@@ -90,7 +90,7 @@ fun ScheduleScreen(
                 }
             }
 
-            Divider()
+            HorizontalDivider()
 
             // Schedule content
             Box(modifier = Modifier.fillMaxSize()) {
