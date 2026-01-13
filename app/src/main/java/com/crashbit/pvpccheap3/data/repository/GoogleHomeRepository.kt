@@ -493,6 +493,7 @@ class GoogleHomeRepository @Inject constructor(
 
     /**
      * Envia comanda ON/OFF a un dispositiu.
+     * Comprova primer si el dispositiu ja està en l'estat desitjat per evitar comandes innecessàries.
      */
     suspend fun setDeviceOnOff(deviceId: String, on: Boolean): CommandResult = withContext(Dispatchers.IO) {
         try {
@@ -519,6 +520,22 @@ class GoogleHomeRepository @Inject constructor(
                             }
 
                             if (onOffTrait != null) {
+                                // Comprovar estat actual abans d'enviar comanda
+                                val currentState = try {
+                                    onOffTrait.onOff ?: false
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "No s'ha pogut llegir estat actual: ${e.message}")
+                                    null // Si no podem llegir, enviem la comanda igualment
+                                }
+
+                                if (currentState != null && currentState == on) {
+                                    Log.d(TAG, "Dispositiu $deviceId ja està ${if (on) "encès" else "apagat"}, saltant comanda")
+                                    // Actualitzar cache per assegurar consistència
+                                    deviceCache[deviceId]?.isOn = on
+                                    return@withContext CommandResult.Success
+                                }
+
+                                // Enviar comanda
                                 if (on) {
                                     onOffTrait.on()
                                 } else {

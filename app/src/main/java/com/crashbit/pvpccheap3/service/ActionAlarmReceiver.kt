@@ -34,9 +34,14 @@ class ActionAlarmReceiver : BroadcastReceiver() {
         const val ACTION_END = "com.crashbit.pvpccheap3.alarm.END"
         const val ACTION_SYNC_PRICES = "com.crashbit.pvpccheap3.alarm.SYNC_PRICES"
         const val ACTION_MIDNIGHT_SYNC = "com.crashbit.pvpccheap3.alarm.MIDNIGHT_SYNC"
+        const val ACTION_RETRY = "com.crashbit.pvpccheap3.alarm.RETRY"
 
         const val EXTRA_ACTION_ID = "action_id"
         const val EXTRA_DEVICE_ID = "device_id"
+        const val EXTRA_SHOULD_BE_ON = "should_be_on"
+        const val EXTRA_RETRY_COUNT = "retry_count"
+
+        const val MAX_RETRIES = 5
     }
 
     @Inject
@@ -64,6 +69,7 @@ class ActionAlarmReceiver : BroadcastReceiver() {
                     ACTION_END -> handleEndActionAsync(context, intent)
                     ACTION_SYNC_PRICES -> handleSyncPrices(context)
                     ACTION_MIDNIGHT_SYNC -> handleMidnightSync(context)
+                    ACTION_RETRY -> handleRetryAction(context, intent)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error processant alarma: ${e.message}", e)
@@ -190,6 +196,45 @@ class ActionAlarmReceiver : BroadcastReceiver() {
             otherAction.startTime == currentEndTime &&
             otherAction.status == "pending"
         }
+    }
+
+    /**
+     * Gestiona un reintent d'una acció fallida.
+     * Comprova primer si l'acció encara necessita ser executada.
+     */
+    private fun handleRetryAction(context: Context, intent: Intent) {
+        val actionId = intent.getStringExtra(EXTRA_ACTION_ID)
+        val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)
+        val shouldBeOn = intent.getBooleanExtra(EXTRA_SHOULD_BE_ON, true)
+        val retryCount = intent.getIntExtra(EXTRA_RETRY_COUNT, 1)
+
+        if (actionId == null || deviceId == null) {
+            Log.e(TAG, "RETRY: Falten paràmetres")
+            return
+        }
+
+        Log.d(TAG, "RETRY #$retryCount: actionId=$actionId, deviceId=$deviceId, shouldBeOn=$shouldBeOn")
+
+        // Verificar l'estat actual de l'acció al cache
+        val actions = scheduleCache.getTodaySchedule()
+        val action = actions?.find { it.id == actionId }
+
+        if (action != null) {
+            // Si ja s'ha executat correctament, no reintentar
+            if (action.status == "executed_on" || action.status == "executed_off") {
+                Log.d(TAG, "RETRY: Acció $actionId ja executada (status=${action.status}), no reintentem")
+                return
+            }
+
+            // Si està marcada com missed, no reintentar
+            if (action.status == "missed") {
+                Log.d(TAG, "RETRY: Acció $actionId marcada com missed, no reintentem")
+                return
+            }
+        }
+
+        // Delegar al servei amb informació de reintent
+        ScheduleExecutorService.retryAction(context, actionId, deviceId, shouldBeOn, retryCount)
     }
 
     /**

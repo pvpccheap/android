@@ -57,11 +57,15 @@ class ScheduleExecutorService : Service() {
         const val ACTION_SYNC_PRICES = "com.crashbit.pvpccheap3.action.SYNC_PRICES"
         const val ACTION_MARK_MISSED = "com.crashbit.pvpccheap3.action.MARK_MISSED"
         const val ACTION_MARK_EXECUTED_OFF = "com.crashbit.pvpccheap3.action.MARK_EXECUTED_OFF"
+        const val ACTION_RETRY = "com.crashbit.pvpccheap3.action.RETRY"
 
         // Extras
         const val EXTRA_ACTION_ID = "action_id"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_SHOULD_BE_ON = "should_be_on"
+        const val EXTRA_RETRY_COUNT = "retry_count"
+
+        const val MAX_RETRIES = 5
 
         fun startService(context: Context) {
             val intent = Intent(context, ScheduleExecutorService::class.java).apply {
@@ -142,6 +146,25 @@ class ScheduleExecutorService : Service() {
                 Log.e(TAG, "Error marcant executed_off: ${e.message}")
             }
         }
+
+        fun retryAction(context: Context, actionId: String, deviceId: String, shouldBeOn: Boolean, retryCount: Int) {
+            val intent = Intent(context, ScheduleExecutorService::class.java).apply {
+                action = ACTION_RETRY
+                putExtra(EXTRA_ACTION_ID, actionId)
+                putExtra(EXTRA_DEVICE_ID, deviceId)
+                putExtra(EXTRA_SHOULD_BE_ON, shouldBeOn)
+                putExtra(EXTRA_RETRY_COUNT, retryCount)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reintentant acció: ${e.message}")
+            }
+        }
     }
 
     @Inject
@@ -196,6 +219,13 @@ class ScheduleExecutorService : Service() {
             ACTION_MARK_EXECUTED_OFF -> {
                 val actionId = intent.getStringExtra(EXTRA_ACTION_ID) ?: return START_STICKY
                 handleMarkExecutedOff(actionId)
+            }
+            ACTION_RETRY -> {
+                val actionId = intent.getStringExtra(EXTRA_ACTION_ID) ?: return START_STICKY
+                val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return START_STICKY
+                val shouldBeOn = intent.getBooleanExtra(EXTRA_SHOULD_BE_ON, true)
+                val retryCount = intent.getIntExtra(EXTRA_RETRY_COUNT, 1)
+                handleRetryAction(actionId, deviceId, shouldBeOn, retryCount)
             }
         }
 
@@ -359,8 +389,16 @@ class ScheduleExecutorService : Service() {
                         scheduleRepository.updateActionStatus(actionId, "failed")
                         updateNotification("Error: ${result.message}")
 
-                        // Programar reintent en 5 minuts
-                        scheduleRetry(actionId, deviceId, shouldBeOn, 5 * 60 * 1000L)
+                        // Programar reintent amb alarma exacta en 2 minuts
+                        Log.d(TAG, "Programant reintent #1 en 2 minuts")
+                        ActionAlarmScheduler.scheduleRetryAction(
+                            this@ScheduleExecutorService,
+                            actionId,
+                            deviceId,
+                            shouldBeOn,
+                            delayMinutes = 2,
+                            retryCount = 1
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -368,8 +406,16 @@ class ScheduleExecutorService : Service() {
                 scheduleRepository.updateActionStatus(actionId, "failed")
                 updateNotification("Error: ${e.message}")
 
-                // Programar reintent
-                scheduleRetry(actionId, deviceId, shouldBeOn, 5 * 60 * 1000L)
+                // Programar reintent amb alarma exacta en 2 minuts
+                Log.d(TAG, "Programant reintent #1 en 2 minuts")
+                ActionAlarmScheduler.scheduleRetryAction(
+                    this@ScheduleExecutorService,
+                    actionId,
+                    deviceId,
+                    shouldBeOn,
+                    delayMinutes = 2,
+                    retryCount = 1
+                )
             } finally {
                 try {
                     if (wl.isHeld) wl.release()
@@ -433,6 +479,99 @@ class ScheduleExecutorService : Service() {
                 scheduleRepository.updateActionStatus(actionId, "executed_off")
             } catch (e: Exception) {
                 Log.e(TAG, "Error marcant executed_off: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Gestiona un reintent d'una acció fallida.
+     * Si té èxit, actualitza l'estat a executed_on/executed_off.
+     * Si falla i no s'han esgotat els reintents, programa un altre reintent.
+     */
+    private fun handleRetryAction(actionId: String, deviceId: String, shouldBeOn: Boolean, retryCount: Int) {
+        serviceScope.launch {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wl = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "PvpcCheap:RetryExecution"
+            )
+            wl.acquire(60000)
+
+            try {
+                Log.d(TAG, "RETRY #$retryCount: Executant acció $actionId (shouldBeOn=$shouldBeOn)")
+                updateNotification("Reintent #$retryCount: ${if (shouldBeOn) "Encenent" else "Apagant"}...")
+
+                // Assegurar que Google Home està inicialitzat
+                if (!isGoogleHomeInitialized.get()) {
+                    Log.d(TAG, "Google Home no inicialitzat, inicialitzant...")
+                    googleHomeRepository.initialize()
+                    if (googleHomeRepository.isInitialized()) {
+                        isGoogleHomeInitialized.set(true)
+                    } else {
+                        throw Exception("No s'ha pogut inicialitzar Google Home SDK")
+                    }
+                }
+
+                // Refrescar estat del dispositiu
+                googleHomeRepository.refreshDeviceStates()
+
+                // Executar l'acció
+                val result = googleHomeRepository.setDeviceOnOff(deviceId, shouldBeOn)
+
+                when (result) {
+                    is CommandResult.Success -> {
+                        Log.d(TAG, "RETRY #$retryCount: Acció $actionId executada correctament!")
+                        val newStatus = if (shouldBeOn) "executed_on" else "executed_off"
+                        scheduleRepository.updateActionStatus(actionId, newStatus)
+                        updateNotification("Reintent #$retryCount: ${if (shouldBeOn) "ON" else "OFF"} OK")
+                    }
+                    is CommandResult.Error -> {
+                        Log.e(TAG, "RETRY #$retryCount: Error executant acció $actionId: ${result.message}")
+
+                        if (retryCount < MAX_RETRIES) {
+                            // Programar següent reintent amb alarma exacta (2 minuts)
+                            Log.d(TAG, "Programant reintent #${retryCount + 1} en 2 minuts")
+                            ActionAlarmScheduler.scheduleRetryAction(
+                                this@ScheduleExecutorService,
+                                actionId,
+                                deviceId,
+                                shouldBeOn,
+                                delayMinutes = 2,
+                                retryCount = retryCount + 1
+                            )
+                            updateNotification("Reintent #$retryCount fallit, proper en 2 min")
+                        } else {
+                            // S'han esgotat els reintents
+                            Log.e(TAG, "RETRY: S'han esgotat els $MAX_RETRIES reintents per $actionId")
+                            scheduleRepository.updateActionStatus(actionId, "failed")
+                            updateNotification("Acció fallida després de $MAX_RETRIES reintents")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "RETRY #$retryCount: Excepció: ${e.message}", e)
+
+                if (retryCount < MAX_RETRIES) {
+                    Log.d(TAG, "Programant reintent #${retryCount + 1} en 2 minuts")
+                    ActionAlarmScheduler.scheduleRetryAction(
+                        this@ScheduleExecutorService,
+                        actionId,
+                        deviceId,
+                        shouldBeOn,
+                        delayMinutes = 2,
+                        retryCount = retryCount + 1
+                    )
+                    updateNotification("Error, proper reintent en 2 min")
+                } else {
+                    scheduleRepository.updateActionStatus(actionId, "failed")
+                    updateNotification("Acció fallida després de $MAX_RETRIES reintents")
+                }
+            } finally {
+                try {
+                    if (wl.isHeld) wl.release()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error alliberant wake lock: ${e.message}")
+                }
             }
         }
     }
@@ -552,13 +691,6 @@ class ScheduleExecutorService : Service() {
         } catch (e: DateTimeParseException) {
             Log.e(TAG, "Error parsejant temps '$timeStr': ${e.message}")
             null
-        }
-    }
-
-    private fun scheduleRetry(actionId: String, deviceId: String, shouldBeOn: Boolean, delayMs: Long) {
-        serviceScope.launch {
-            delay(delayMs)
-            handleExecuteAction(actionId, deviceId, shouldBeOn)
         }
     }
 

@@ -123,6 +123,39 @@ object ActionAlarmScheduler {
     }
 
     /**
+     * Programa una alarma de REINTENT per una acció fallida.
+     * Utilitza alarmes exactes per assegurar execució encara que l'app estigui en segon pla.
+     *
+     * @param delayMinutes Minuts fins al reintent (per defecte 2 minuts)
+     * @param retryCount Nombre de reintent actual (per al requestCode únic)
+     */
+    fun scheduleRetryAction(
+        context: Context,
+        actionId: String,
+        deviceId: String,
+        shouldBeOn: Boolean,
+        delayMinutes: Int = 2,
+        retryCount: Int = 1
+    ) {
+        val now = System.currentTimeMillis()
+        val triggerTime = now + (delayMinutes * 60 * 1000L)
+
+        // RequestCode únic per cada reintent (base 30000 + hash + retry)
+        val requestCode = 30000 + actionId.hashCode().and(0xFFF) + (retryCount * 0x1000)
+
+        val intent = Intent(context, ActionAlarmReceiver::class.java).apply {
+            action = ActionAlarmReceiver.ACTION_RETRY
+            putExtra(ActionAlarmReceiver.EXTRA_ACTION_ID, actionId)
+            putExtra(ActionAlarmReceiver.EXTRA_DEVICE_ID, deviceId)
+            putExtra(ActionAlarmReceiver.EXTRA_SHOULD_BE_ON, shouldBeOn)
+            putExtra(ActionAlarmReceiver.EXTRA_RETRY_COUNT, retryCount)
+        }
+
+        scheduleExactAlarm(context, triggerTime, requestCode, intent)
+        Log.d(TAG, "Alarma RETRY #$retryCount programada: $actionId en $delayMinutes minuts")
+    }
+
+    /**
      * Cancel.la totes les alarmes d'una acció.
      */
     fun cancelActionAlarms(context: Context, actionId: String) {
