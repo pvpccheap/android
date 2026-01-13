@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.PowerManager
 import android.util.Log
 import com.crashbit.pvpccheap3.data.local.ScheduleCache
+import com.crashbit.pvpccheap3.util.FileLogger
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,7 @@ class ActionAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         Log.d(TAG, "Alarma rebuda: action=${intent.action}")
+        FileLogger.i(TAG, "*** ALARMA REBUDA: ${intent.action} ***")
 
         // goAsync() ens permet executar operacions asíncrones sense que Android
         // mati el receiver als 10 segons (tenim fins a 30 segons)

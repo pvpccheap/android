@@ -7,6 +7,7 @@ import androidx.work.Configuration
 import com.crashbit.pvpccheap3.service.ActionAlarmScheduler
 import com.crashbit.pvpccheap3.service.ScheduleExecutorService
 import com.crashbit.pvpccheap3.util.BatteryOptimizationHelper
+import com.crashbit.pvpccheap3.util.FileLogger
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -28,11 +29,16 @@ class PvpcApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Inicialitzar FileLogger PRIMER
+        FileLogger.init(this)
+        FileLogger.i(TAG, "=== APLICACIÓ INICIADA ===")
+
         Log.d(TAG, "Inicialitzant aplicació...")
 
         // Iniciar el Foreground Service
         ScheduleExecutorService.startService(this)
-        Log.d(TAG, "Foreground Service iniciat")
+        FileLogger.i(TAG, "Foreground Service iniciat")
 
         // Programar sincronització de preus (20:35)
         ActionAlarmScheduler.schedulePriceSync(this)

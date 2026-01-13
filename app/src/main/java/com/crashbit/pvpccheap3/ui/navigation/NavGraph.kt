@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.crashbit.pvpccheap3.ui.screens.debug.DebugLogsScreen
 import com.crashbit.pvpccheap3.ui.screens.devices.DevicesScreen
 import com.crashbit.pvpccheap3.ui.screens.login.LoginScreen
 import com.crashbit.pvpccheap3.ui.screens.prices.PricesScreen
@@ -28,6 +29,7 @@ sealed class Screen(val route: String) {
     }
     data object Schedule : Screen("schedule")
     data object Prices : Screen("prices")
+    data object DebugLogs : Screen("debug_logs")
 }
 
 sealed class BottomNavItem(
@@ -72,7 +74,11 @@ fun NavGraph(
             }
 
             composable(Screen.Devices.route) {
-                DevicesScreen()
+                DevicesScreen(
+                    onNavigateToDebugLogs = {
+                        navController.navigate(Screen.DebugLogs.route)
+                    }
+                )
             }
 
             composable(Screen.Rules.route) {
@@ -97,6 +103,12 @@ fun NavGraph(
 
             composable(Screen.Prices.route) {
                 PricesScreen()
+            }
+
+            composable(Screen.DebugLogs.route) {
+                DebugLogsScreen(
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }

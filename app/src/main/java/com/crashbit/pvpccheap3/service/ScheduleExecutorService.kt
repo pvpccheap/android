@@ -19,6 +19,7 @@ import com.crashbit.pvpccheap3.data.model.CommandResult
 import com.crashbit.pvpccheap3.data.model.ScheduledAction
 import com.crashbit.pvpccheap3.data.repository.GoogleHomeRepository
 import com.crashbit.pvpccheap3.data.repository.ScheduleRepository
+import com.crashbit.pvpccheap3.util.FileLogger
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import java.time.LocalTime
@@ -187,13 +188,121 @@ class ScheduleExecutorService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service creat")
+        FileLogger.i(TAG, "=== SERVICE CREAT ===")
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         createNotificationChannel()
         resetRestartCountIfNeeded()
+
+        // Iniciar comprovació periòdica de seguretat
+        startSafetyCheck()
+    }
+
+    /**
+     * Inicia una comprovació periòdica que assegura que els dispositius
+     * estan apagats quan no hi ha cap acció activa.
+     */
+    private fun startSafetyCheck() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(5 * 60 * 1000L) // Cada 5 minuts
+                performSafetyCheck()
+            }
+        }
+    }
+
+    /**
+     * Comprova si hi ha dispositius que haurien d'estar apagats però estan encesos.
+     */
+    private suspend fun performSafetyCheck() {
+        try {
+            val now = LocalTime.now()
+            FileLogger.d(TAG, "SAFETY CHECK a les $now")
+
+            // Obtenir accions d'avui
+            val result = scheduleRepository.getTodaySchedule()
+            result.fold(
+                onSuccess = { actions ->
+                    // Per cada dispositiu únic, comprovar si hauria d'estar encès
+                    val deviceIds = actions.map { it.googleDeviceId }.distinct()
+
+                    for (deviceId in deviceIds) {
+                        val deviceActions = actions.filter { it.googleDeviceId == deviceId }
+                        val shouldBeOn = isDeviceSupposedToBeOn(deviceActions, now)
+
+                        FileLogger.d(TAG, "SAFETY: Dispositiu $deviceId shouldBeOn=$shouldBeOn")
+
+                        if (!shouldBeOn) {
+                            // Comprovar estat real del dispositiu
+                            if (isGoogleHomeInitialized.get()) {
+                                googleHomeRepository.refreshDeviceStates()
+                                val stateResult = googleHomeRepository.getDeviceState(deviceId)
+                                stateResult.fold(
+                                    onSuccess = { isOn ->
+                                        if (isOn == true) {
+                                            FileLogger.w(TAG, "SAFETY: Dispositiu $deviceId està ENCÈS però NO hauria d'estar-ho! APAGANT...")
+                                            val cmdResult = googleHomeRepository.setDeviceOnOff(deviceId, false)
+                                            if (cmdResult is CommandResult.Success) {
+                                                FileLogger.i(TAG, "SAFETY: Dispositiu $deviceId APAGAT correctament")
+                                            } else {
+                                                FileLogger.e(TAG, "SAFETY: Error apagant dispositiu $deviceId")
+                                            }
+                                        }
+                                    },
+                                    onFailure = { e ->
+                                        FileLogger.e(TAG, "SAFETY: Error obtenint estat de $deviceId: ${e.message}")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                },
+                onFailure = { e ->
+                    FileLogger.e(TAG, "SAFETY: Error obtenint schedule: ${e.message}")
+                }
+            )
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "SAFETY: Excepció: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Determina si un dispositiu hauria d'estar encès basant-se en les seves accions.
+     */
+    private fun isDeviceSupposedToBeOn(actions: List<ScheduledAction>, now: LocalTime): Boolean {
+        val formatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+        for (action in actions) {
+            // Només considerar accions executades o en curs
+            if (action.status != "executed_on" && action.status != "pending") continue
+
+            val startTime = try {
+                LocalTime.parse(action.startTime, formatter)
+            } catch (e: Exception) { continue }
+
+            val endTime = try {
+                LocalTime.parse(action.endTime, formatter)
+            } catch (e: Exception) { continue }
+
+            // Comprovar si estem dins del rang
+            val crossesMidnight = endTime.isBefore(startTime) || endTime == startTime
+
+            val isWithinRange = if (crossesMidnight) {
+                now >= startTime || now < endTime
+            } else {
+                now >= startTime && now < endTime
+            }
+
+            if (isWithinRange && action.status == "executed_on") {
+                return true
+            }
+        }
+
+        return false
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand: action=${intent?.action}")
+        FileLogger.i(TAG, "onStartCommand: action=${intent?.action}")
 
         // Assegurar-se que estem en foreground
         startForeground(NOTIFICATION_ID, createNotification("Servei actiu"))
@@ -358,6 +467,7 @@ class ScheduleExecutorService : Service() {
 
             try {
                 Log.d(TAG, "Executant acció $actionId: shouldBeOn=$shouldBeOn")
+                FileLogger.i(TAG, ">>> EXECUTANT ACCIÓ $actionId: shouldBeOn=$shouldBeOn")
                 updateNotification(if (shouldBeOn) "Encenent dispositiu..." else "Apagant dispositiu...")
 
                 // Assegurar que Google Home està inicialitzat
@@ -380,12 +490,14 @@ class ScheduleExecutorService : Service() {
                 when (result) {
                     is CommandResult.Success -> {
                         Log.d(TAG, "Acció $actionId executada correctament")
+                        FileLogger.i(TAG, "<<< ACCIÓ $actionId COMPLETADA: ${if (shouldBeOn) "ON" else "OFF"}")
                         val newStatus = if (shouldBeOn) "executed_on" else "executed_off"
                         scheduleRepository.updateActionStatus(actionId, newStatus)
                         updateNotification("Última acció: ${if (shouldBeOn) "ON" else "OFF"} OK")
                     }
                     is CommandResult.Error -> {
                         Log.e(TAG, "Error executant acció $actionId: ${result.message}")
+                        FileLogger.e(TAG, "!!! ERROR ACCIÓ $actionId: ${result.message}")
                         scheduleRepository.updateActionStatus(actionId, "failed")
                         updateNotification("Error: ${result.message}")
 

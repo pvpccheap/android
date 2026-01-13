@@ -17,10 +17,12 @@ import com.crashbit.pvpccheap3.ui.components.BatteryOptimizationBanner
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesScreen(
+    onNavigateToDebugLogs: () -> Unit = {},
     viewModel: DevicesViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showMenu by remember { mutableStateOf(false) }
 
     // Mostrar errors
     LaunchedEffect(uiState.error) {
@@ -47,6 +49,28 @@ fun DevicesScreen(
                             )
                         } else {
                             Icon(Icons.Default.Sync, contentDescription = "Sincronitzar")
+                        }
+                    }
+
+                    // Menú amb més opcions
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Més opcions")
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Debug Logs") },
+                                onClick = {
+                                    showMenu = false
+                                    onNavigateToDebugLogs()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.BugReport, contentDescription = null)
+                                }
+                            )
                         }
                     }
                 }
