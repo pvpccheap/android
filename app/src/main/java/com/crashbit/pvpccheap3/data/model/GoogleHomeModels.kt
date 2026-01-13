@@ -75,7 +75,10 @@ sealed class DeviceCommand {
  */
 sealed class CommandResult {
     data object Success : CommandResult()
-    data class Error(val message: String) : CommandResult()
+    data class Error(
+        val message: String,
+        val isAuthError: Boolean = false
+    ) : CommandResult()
 }
 
 /**

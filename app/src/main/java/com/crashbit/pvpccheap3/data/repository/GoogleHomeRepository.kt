@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import androidx.activity.ComponentActivity
 import com.crashbit.pvpccheap3.data.model.*
+import com.crashbit.pvpccheap3.util.FileLogger
 import com.google.home.Home
 import com.google.home.HomeClient
 import com.google.home.HomeConfig
@@ -496,19 +497,34 @@ class GoogleHomeRepository @Inject constructor(
      * Comprova primer si el dispositiu ja està en l'estat desitjat per evitar comandes innecessàries.
      */
     suspend fun setDeviceOnOff(deviceId: String, on: Boolean): CommandResult = withContext(Dispatchers.IO) {
+        FileLogger.i(TAG, "setDeviceOnOff: deviceId=$deviceId, on=$on")
+
         try {
-            val client = homeClient ?: return@withContext CommandResult.Error("Client no inicialitzat")
+            val client = homeClient
+            if (client == null) {
+                FileLogger.e(TAG, "setDeviceOnOff: Client és NULL!")
+                return@withContext CommandResult.Error("Client no inicialitzat", isAuthError = true)
+            }
+
+            if (!_isAuthorized.value) {
+                FileLogger.e(TAG, "setDeviceOnOff: No autoritzat (_isAuthorized=false)")
+                return@withContext CommandResult.Error("No autoritzat amb Google Home", isAuthError = true)
+            }
 
             Log.d(TAG, "Controlant dispositiu $deviceId: ${if (on) "ON" else "OFF"}")
 
             // Buscar dispositiu a les estructures
+            FileLogger.d(TAG, "setDeviceOnOff: Obtenint estructures...")
             val structures = client.structures().list()
+            FileLogger.d(TAG, "setDeviceOnOff: ${structures.size} estructures trobades")
 
             for (structure in structures) {
                 val homeDevices = structure.devices().list()
+                FileLogger.d(TAG, "setDeviceOnOff: Estructura ${structure.name}: ${homeDevices.size} dispositius")
 
                 for (homeDevice in homeDevices) {
                     if (homeDevice.id.id == deviceId) {
+                        FileLogger.d(TAG, "setDeviceOnOff: Dispositiu trobat! Obtenint types...")
                         val types = homeDevice.types().first()
 
                         for (type in types) {
@@ -524,18 +540,19 @@ class GoogleHomeRepository @Inject constructor(
                                 val currentState = try {
                                     onOffTrait.onOff ?: false
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "No s'ha pogut llegir estat actual: ${e.message}")
+                                    FileLogger.w(TAG, "setDeviceOnOff: No s'ha pogut llegir estat actual: ${e.message}")
                                     null // Si no podem llegir, enviem la comanda igualment
                                 }
 
                                 if (currentState != null && currentState == on) {
-                                    Log.d(TAG, "Dispositiu $deviceId ja està ${if (on) "encès" else "apagat"}, saltant comanda")
+                                    FileLogger.i(TAG, "setDeviceOnOff: Dispositiu ja està ${if (on) "encès" else "apagat"}, saltant comanda")
                                     // Actualitzar cache per assegurar consistència
                                     deviceCache[deviceId]?.isOn = on
                                     return@withContext CommandResult.Success
                                 }
 
                                 // Enviar comanda
+                                FileLogger.i(TAG, "setDeviceOnOff: Enviant comanda ${if (on) "ON" else "OFF"}...")
                                 if (on) {
                                     onOffTrait.on()
                                 } else {
@@ -545,7 +562,7 @@ class GoogleHomeRepository @Inject constructor(
                                 // Actualitzar cache
                                 deviceCache[deviceId]?.isOn = on
 
-                                Log.d(TAG, "Comanda enviada correctament")
+                                FileLogger.i(TAG, "setDeviceOnOff: Comanda enviada correctament!")
                                 return@withContext CommandResult.Success
                             }
                         }
@@ -553,13 +570,97 @@ class GoogleHomeRepository @Inject constructor(
                 }
             }
 
+            FileLogger.e(TAG, "setDeviceOnOff: Dispositiu $deviceId no trobat a cap estructura")
             CommandResult.Error("Dispositiu no trobat")
         } catch (e: HomeException) {
-            Log.e(TAG, "HomeException: ${e.message}", e)
-            CommandResult.Error(e.message ?: "Error executant comanda")
+            val errorMsg = "HomeException [code=${e.message}]: ${e.cause?.message ?: e.message}"
+            FileLogger.e(TAG, "setDeviceOnOff: $errorMsg", e)
+
+            // Detectar errors d'autorització comuns
+            val isAuthError = isAuthorizationError(e)
+            if (isAuthError) {
+                FileLogger.e(TAG, "setDeviceOnOff: DETECTAT ERROR D'AUTORITZACIÓ - cal reinicialitzar")
+                _isAuthorized.value = false
+                _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+            }
+
+            CommandResult.Error(e.message ?: "Error executant comanda", isAuthError = isAuthError)
         } catch (e: Exception) {
-            Log.e(TAG, "Exception: ${e.message}", e)
-            CommandResult.Error(e.message ?: "Error desconegut")
+            val errorMsg = "${e.javaClass.simpleName}: ${e.message}"
+            FileLogger.e(TAG, "setDeviceOnOff: $errorMsg", e)
+
+            // Alguns errors genèrics poden ser d'autorització
+            val isAuthError = e.message?.contains("auth", ignoreCase = true) == true ||
+                    e.message?.contains("permission", ignoreCase = true) == true ||
+                    e.message?.contains("token", ignoreCase = true) == true ||
+                    e.message?.contains("expired", ignoreCase = true) == true
+
+            if (isAuthError) {
+                FileLogger.e(TAG, "setDeviceOnOff: Possible error d'autorització detectat")
+                _isAuthorized.value = false
+                _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+            }
+
+            CommandResult.Error(e.message ?: "Error desconegut", isAuthError = isAuthError)
+        }
+    }
+
+    /**
+     * Detecta si un HomeException és un error d'autorització/autenticació.
+     */
+    private fun isAuthorizationError(e: HomeException): Boolean {
+        val message = (e.message ?: "") + (e.cause?.message ?: "")
+        return message.contains("auth", ignoreCase = true) ||
+                message.contains("permission", ignoreCase = true) ||
+                message.contains("token", ignoreCase = true) ||
+                message.contains("expired", ignoreCase = true) ||
+                message.contains("unauthorized", ignoreCase = true) ||
+                message.contains("unauthenticated", ignoreCase = true) ||
+                message.contains("not granted", ignoreCase = true) ||
+                message.contains("401", ignoreCase = true) ||
+                message.contains("403", ignoreCase = true)
+    }
+
+    /**
+     * Força una reinicialització del SDK.
+     * Útil quan es detecta un error d'autorització.
+     */
+    suspend fun forceReinitialize(): Result<Unit> {
+        FileLogger.i(TAG, "forceReinitialize: Forçant reinicialització del SDK...")
+        _isAuthorized.value = false
+        _authState.value = GoogleHomeAuthState.NOT_INITIALIZED
+        homeClient = null
+        return initialize()
+    }
+
+    /**
+     * Comprova si el SDK està realment autoritzat fent una crida de test.
+     */
+    suspend fun verifyAuthorization(): Boolean = withContext(Dispatchers.IO) {
+        FileLogger.d(TAG, "verifyAuthorization: Verificant autorització...")
+        try {
+            val client = homeClient ?: return@withContext false
+
+            // Intentar obtenir estructures com a test
+            val structures = withTimeoutOrNull(10000) {
+                client.structures().list()
+            }
+
+            val isValid = structures != null && structures.isNotEmpty()
+            FileLogger.d(TAG, "verifyAuthorization: Resultat=$isValid (${structures?.size ?: 0} estructures)")
+
+            if (!isValid && _isAuthorized.value) {
+                FileLogger.w(TAG, "verifyAuthorization: Autorització invàlida, actualitzant estat...")
+                _isAuthorized.value = false
+                _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+            }
+
+            isValid
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "verifyAuthorization: Error - ${e.message}")
+            _isAuthorized.value = false
+            _authState.value = GoogleHomeAuthState.NOT_AUTHORIZED
+            false
         }
     }
 

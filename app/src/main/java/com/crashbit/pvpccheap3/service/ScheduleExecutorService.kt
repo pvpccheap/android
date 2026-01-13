@@ -212,16 +212,48 @@ class ScheduleExecutorService : Service() {
 
     /**
      * Comprova si hi ha dispositius que haurien d'estar apagats però estan encesos.
+     * També verifica periòdicament l'autorització de Google Home.
      */
     private suspend fun performSafetyCheck() {
         try {
             val now = LocalTime.now()
-            FileLogger.d(TAG, "SAFETY CHECK a les $now")
+            FileLogger.d(TAG, "=== SAFETY CHECK a les $now ===")
 
-            // Obtenir accions d'avui
+            // 1. Verificar autorització de Google Home
+            if (isGoogleHomeInitialized.get()) {
+                FileLogger.d(TAG, "SAFETY: Verificant autorització de Google Home...")
+                val isAuthorized = googleHomeRepository.verifyAuthorization()
+                if (!isAuthorized) {
+                    FileLogger.w(TAG, "SAFETY: Google Home NO autoritzat! Forçant reinicialització...")
+                    isGoogleHomeInitialized.set(false)
+                    googleHomeRepository.forceReinitialize()
+
+                    // Esperar un moment i verificar si s'ha reinicialitzat
+                    delay(2000)
+                    if (googleHomeRepository.isInitialized()) {
+                        isGoogleHomeInitialized.set(true)
+                        FileLogger.i(TAG, "SAFETY: Google Home reinicialitzat correctament!")
+                    } else {
+                        FileLogger.e(TAG, "SAFETY: No s'ha pogut reinicialitzar Google Home")
+                    }
+                } else {
+                    FileLogger.d(TAG, "SAFETY: Google Home autoritzat OK")
+                }
+            } else {
+                FileLogger.d(TAG, "SAFETY: Google Home no inicialitzat, intentant inicialitzar...")
+                googleHomeRepository.initialize()
+                if (googleHomeRepository.isInitialized()) {
+                    isGoogleHomeInitialized.set(true)
+                    FileLogger.i(TAG, "SAFETY: Google Home inicialitzat correctament!")
+                }
+            }
+
+            // 2. Obtenir accions d'avui
             val result = scheduleRepository.getTodaySchedule()
             result.fold(
                 onSuccess = { actions ->
+                    FileLogger.d(TAG, "SAFETY: ${actions.size} accions per avui")
+
                     // Per cada dispositiu únic, comprovar si hauria d'estar encès
                     val deviceIds = actions.map { it.googleDeviceId }.distinct()
 
@@ -241,17 +273,28 @@ class ScheduleExecutorService : Service() {
                                         if (isOn == true) {
                                             FileLogger.w(TAG, "SAFETY: Dispositiu $deviceId està ENCÈS però NO hauria d'estar-ho! APAGANT...")
                                             val cmdResult = googleHomeRepository.setDeviceOnOff(deviceId, false)
-                                            if (cmdResult is CommandResult.Success) {
-                                                FileLogger.i(TAG, "SAFETY: Dispositiu $deviceId APAGAT correctament")
-                                            } else {
-                                                FileLogger.e(TAG, "SAFETY: Error apagant dispositiu $deviceId")
+                                            when (cmdResult) {
+                                                is CommandResult.Success -> {
+                                                    FileLogger.i(TAG, "SAFETY: Dispositiu $deviceId APAGAT correctament")
+                                                }
+                                                is CommandResult.Error -> {
+                                                    FileLogger.e(TAG, "SAFETY: Error apagant dispositiu $deviceId: ${cmdResult.message}")
+                                                    if (cmdResult.isAuthError) {
+                                                        FileLogger.w(TAG, "SAFETY: Error d'autorització, marcant per reinicialització")
+                                                        isGoogleHomeInitialized.set(false)
+                                                    }
+                                                }
                                             }
+                                        } else {
+                                            FileLogger.d(TAG, "SAFETY: Dispositiu $deviceId ja està apagat, OK")
                                         }
                                     },
                                     onFailure = { e ->
                                         FileLogger.e(TAG, "SAFETY: Error obtenint estat de $deviceId: ${e.message}")
                                     }
                                 )
+                            } else {
+                                FileLogger.w(TAG, "SAFETY: No es pot verificar $deviceId - Google Home no inicialitzat")
                             }
                         }
                     }
@@ -260,6 +303,8 @@ class ScheduleExecutorService : Service() {
                     FileLogger.e(TAG, "SAFETY: Error obtenint schedule: ${e.message}")
                 }
             )
+
+            FileLogger.d(TAG, "=== SAFETY CHECK COMPLETAT ===")
         } catch (e: Exception) {
             FileLogger.e(TAG, "SAFETY: Excepció: ${e.message}", e)
         }
@@ -467,16 +512,18 @@ class ScheduleExecutorService : Service() {
 
             try {
                 Log.d(TAG, "Executant acció $actionId: shouldBeOn=$shouldBeOn")
-                FileLogger.i(TAG, ">>> EXECUTANT ACCIÓ $actionId: shouldBeOn=$shouldBeOn")
+                FileLogger.i(TAG, ">>> EXECUTANT ACCIÓ $actionId: shouldBeOn=$shouldBeOn, deviceId=$deviceId")
                 updateNotification(if (shouldBeOn) "Encenent dispositiu..." else "Apagant dispositiu...")
 
                 // Assegurar que Google Home està inicialitzat
                 if (!isGoogleHomeInitialized.get()) {
-                    Log.d(TAG, "Google Home no inicialitzat, inicialitzant...")
+                    FileLogger.d(TAG, "Google Home no inicialitzat, inicialitzant...")
                     googleHomeRepository.initialize()
                     if (googleHomeRepository.isInitialized()) {
                         isGoogleHomeInitialized.set(true)
+                        FileLogger.i(TAG, "Google Home inicialitzat correctament")
                     } else {
+                        FileLogger.e(TAG, "No s'ha pogut inicialitzar Google Home SDK")
                         throw Exception("No s'ha pogut inicialitzar Google Home SDK")
                     }
                 }
@@ -497,7 +544,15 @@ class ScheduleExecutorService : Service() {
                     }
                     is CommandResult.Error -> {
                         Log.e(TAG, "Error executant acció $actionId: ${result.message}")
-                        FileLogger.e(TAG, "!!! ERROR ACCIÓ $actionId: ${result.message}")
+                        FileLogger.e(TAG, "!!! ERROR ACCIÓ $actionId: ${result.message} (isAuthError=${result.isAuthError})")
+
+                        // Si és error d'autorització, forçar reinicialització
+                        if (result.isAuthError) {
+                            FileLogger.w(TAG, "Error d'autorització detectat! Forçant reinicialització...")
+                            isGoogleHomeInitialized.set(false)
+                            googleHomeRepository.forceReinitialize()
+                        }
+
                         scheduleRepository.updateActionStatus(actionId, "failed")
                         updateNotification("Error: ${result.message}")
 
@@ -610,16 +665,18 @@ class ScheduleExecutorService : Service() {
             wl.acquire(60000)
 
             try {
-                Log.d(TAG, "RETRY #$retryCount: Executant acció $actionId (shouldBeOn=$shouldBeOn)")
+                FileLogger.i(TAG, ">>> RETRY #$retryCount: actionId=$actionId, shouldBeOn=$shouldBeOn")
                 updateNotification("Reintent #$retryCount: ${if (shouldBeOn) "Encenent" else "Apagant"}...")
 
                 // Assegurar que Google Home està inicialitzat
                 if (!isGoogleHomeInitialized.get()) {
-                    Log.d(TAG, "Google Home no inicialitzat, inicialitzant...")
+                    FileLogger.d(TAG, "RETRY: Google Home no inicialitzat, inicialitzant...")
                     googleHomeRepository.initialize()
                     if (googleHomeRepository.isInitialized()) {
                         isGoogleHomeInitialized.set(true)
+                        FileLogger.i(TAG, "RETRY: Google Home inicialitzat correctament")
                     } else {
+                        FileLogger.e(TAG, "RETRY: No s'ha pogut inicialitzar Google Home SDK")
                         throw Exception("No s'ha pogut inicialitzar Google Home SDK")
                     }
                 }
@@ -632,17 +689,24 @@ class ScheduleExecutorService : Service() {
 
                 when (result) {
                     is CommandResult.Success -> {
-                        Log.d(TAG, "RETRY #$retryCount: Acció $actionId executada correctament!")
+                        FileLogger.i(TAG, "<<< RETRY #$retryCount: ÈXIT! Acció $actionId completada")
                         val newStatus = if (shouldBeOn) "executed_on" else "executed_off"
                         scheduleRepository.updateActionStatus(actionId, newStatus)
                         updateNotification("Reintent #$retryCount: ${if (shouldBeOn) "ON" else "OFF"} OK")
                     }
                     is CommandResult.Error -> {
-                        Log.e(TAG, "RETRY #$retryCount: Error executant acció $actionId: ${result.message}")
+                        FileLogger.e(TAG, "!!! RETRY #$retryCount: ERROR $actionId: ${result.message} (isAuthError=${result.isAuthError})")
+
+                        // Si és error d'autorització, forçar reinicialització
+                        if (result.isAuthError) {
+                            FileLogger.w(TAG, "RETRY: Error d'autorització detectat! Forçant reinicialització...")
+                            isGoogleHomeInitialized.set(false)
+                            googleHomeRepository.forceReinitialize()
+                        }
 
                         if (retryCount < MAX_RETRIES) {
                             // Programar següent reintent amb alarma exacta (2 minuts)
-                            Log.d(TAG, "Programant reintent #${retryCount + 1} en 2 minuts")
+                            FileLogger.d(TAG, "RETRY: Programant reintent #${retryCount + 1} en 2 minuts")
                             ActionAlarmScheduler.scheduleRetryAction(
                                 this@ScheduleExecutorService,
                                 actionId,
@@ -654,17 +718,17 @@ class ScheduleExecutorService : Service() {
                             updateNotification("Reintent #$retryCount fallit, proper en 2 min")
                         } else {
                             // S'han esgotat els reintents
-                            Log.e(TAG, "RETRY: S'han esgotat els $MAX_RETRIES reintents per $actionId")
+                            FileLogger.e(TAG, "RETRY: S'han esgotat els $MAX_RETRIES reintents per $actionId")
                             scheduleRepository.updateActionStatus(actionId, "failed")
                             updateNotification("Acció fallida després de $MAX_RETRIES reintents")
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "RETRY #$retryCount: Excepció: ${e.message}", e)
+                FileLogger.e(TAG, "!!! RETRY #$retryCount: EXCEPCIÓ: ${e.message}", e)
 
                 if (retryCount < MAX_RETRIES) {
-                    Log.d(TAG, "Programant reintent #${retryCount + 1} en 2 minuts")
+                    FileLogger.d(TAG, "RETRY: Programant reintent #${retryCount + 1} en 2 minuts")
                     ActionAlarmScheduler.scheduleRetryAction(
                         this@ScheduleExecutorService,
                         actionId,
