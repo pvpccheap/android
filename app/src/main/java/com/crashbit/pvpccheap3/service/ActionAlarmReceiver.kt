@@ -202,7 +202,7 @@ class ActionAlarmReceiver : BroadcastReceiver() {
      * Gestiona un reintent d'una acció fallida.
      * Comprova primer si l'acció encara necessita ser executada.
      */
-    private fun handleRetryAction(context: Context, intent: Intent) {
+    private suspend fun handleRetryAction(context: Context, intent: Intent) {
         val actionId = intent.getStringExtra(EXTRA_ACTION_ID)
         val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID)
         val shouldBeOn = intent.getBooleanExtra(EXTRA_SHOULD_BE_ON, true)
